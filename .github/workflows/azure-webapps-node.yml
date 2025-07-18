@@ -1,74 +1,81 @@
-# GitHub Actions for building and deploying Node.js app to Azure Web App
-
-name: Build and deploy Node.js app to Azure Web App - quizifygame
+name: Build and Deploy to Azure App Service
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AZURE_WEBAPP_NAME: quizifygame    # Your Azure App Service name
+  AZURE_WEBAPP_PACKAGE_PATH: '.'      # Path to your app
+  NODE_VERSION: '18.x'                # Node.js version to use
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read # Required for actions/checkout
-
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '20.x' # Match your runtime (use 20 for stability)
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Build project
-        run: npm run build
-
-      - name: Zip artifact for deployment
-        run: |
-          mkdir build-output
-          cp -r dist package.json package-lock.json node_modules build-output/
-          cd build-output
-          zip -r ../release.zip .
-
-      - name: Upload artifact for deployment job
-        uses: actions/upload-artifact@v4
-        with:
-          name: node-app
-          path: release.zip
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Build TypeScript
+      run: npm run build
+    
+    - name: Create deployment package
+      run: |
+        # Create a clean directory for deployment
+        mkdir deployment
+        
+        # Copy built files
+        cp -r dist deployment/
+        
+        # Copy package.json and package-lock.json
+        cp package*.json deployment/
+        
+        # Copy any other necessary files (like config files, if any)
+        # cp -r config deployment/ # uncomment if you have config files
+        
+        # Install only production dependencies in deployment folder
+        cd deployment
+        npm ci --only=production
+        
+        # Create zip file for deployment
+        cd ..
+        zip -r deployment.zip deployment/
+    
+    - name: Upload deployment package
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-package
+        path: deployment.zip
 
   deploy:
-    runs-on: ubuntu-latest
     needs: build
-
-    permissions:
-      id-token: write
-      contents: read
-
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
     steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v4
-        with:
-          name: node-app
-
-      - name: Unzip artifact
-        run: unzip release.zip -d .
-
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_796BF07635624167BB1E0D80754E2F27 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_2630CE4EAB1C4DEAB39700A2230BE708 }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_B861A0C2DDE2463E93680849D0AE800C }}
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: 'quizifygame'
-          slot-name: 'Production'
-          package: .
+    - name: Download deployment package
+      uses: actions/download-artifact@v4
+      with:
+        name: deployment-package
+    
+    - name: Unzip deployment package
+      run: unzip deployment.zip
+    
+    - name: Deploy to Azure App Service
+      uses: azure/webapps-deploy@v3
+      with:
+        app-name: ${{ env.AZURE_WEBAPP_NAME }}
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        package: deployment/
